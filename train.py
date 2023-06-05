@@ -4,7 +4,7 @@ import datetime
 import os
 import shutil
 import sys
-
+from tqdm import tqdm
 cur_path = os.path.abspath(os.path.dirname(__file__))
 root_path = os.path.split(cur_path)[0]
 sys.path.append(root_path)
@@ -45,7 +45,7 @@ def parse_args():
                         help='Directory for saving checkpoint models')
 
     args = parser.parse_args()
-
+    return args
 
 class Trainer(object):
     def __init__(self, args):
@@ -62,13 +62,11 @@ class Trainer(object):
         valset = COCOSegmentation('/mnt/2tb/mscoco/', 'val', transform=input_transform)
         
         self.train_loader = data.DataLoader(dataset=trainset, batch_size=args.batch_size,
-                                            num_workers=args.workers,
                                             pin_memory=True)
         self.val_loader = data.DataLoader(dataset=valset, batch_size=args.batch_size,
-                                          num_workers=args.workers,
                                           pin_memory=True)
 
-        self.model = nn.DataParallel(DINO2SEG(len(trainset.classes())).to(self.device))
+        self.model = nn.DataParallel(DINO2SEG(len(trainset.classes)).to(self.device))
     
         # create criterion
         a =  1/42
@@ -77,17 +75,16 @@ class Trainer(object):
         self.criterion = nn.CrossEntropyLoss(weight=weights) 
 
         self.optimizer = torch.optim.AdamW(self.model.parameters(),
-                                         lr=args.lr,
-                                         weight_decay=args.weight_decay)
+                                         lr=args.lr)
 
-        self.metric = SegmentationMetric(len(trainset.classes()))
+        self.metric = SegmentationMetric(len(trainset.classes))
         self.best_pred = -1
 
     def train(self):
         iteration = 0
         avg_loss = 0
         for i in range(args.epochs):
-            self.validation(iteration)
+            self.validation(iteration, i)
             self.model.train()
             for images, targets, _ in self.train_loader:
                 iteration = iteration + 1
@@ -122,7 +119,7 @@ class Trainer(object):
                 #     writer.add_image("gt", gt, iteration)
 
 
-    def validation(self, it):
+    def validation(self, it, e):
         # total_inter, total_union, total_correct, total_label = 0, 0, 0, 0
         is_best = False
         torch.cuda.empty_cache() 
@@ -130,7 +127,8 @@ class Trainer(object):
         self.model.eval()
         _preds = []
         _targets = []
-        for images, targets, _ in self.val_loader:
+        print("Evaluating")
+        for image, target, _ in tqdm(self.val_loader):
             image = image.to(self.device)
             target = target.to(self.device)
 
@@ -142,13 +140,14 @@ class Trainer(object):
             pred = torch.max(outputs, 1).indices
             for i in range(pred.shape[0]):
                 if len(_preds)<64:
-                    _preds.append(decode_segmap(pred[i].cpu().data.numpy()))
-                    _targets.append(decode_segmap(targets[i].cpu().data.numpy()))
+                    _preds.append(torchvision.transforms.ToTensor()(decode_segmap(pred[i].cpu().data.numpy())))
+                    _targets.append(torchvision.transforms.ToTensor()(decode_segmap(target[i].cpu().data.numpy())))
 
         _preds = torchvision.utils.make_grid(_preds, nrow=8)
         _targets = torchvision.utils.make_grid(_targets, nrow=8)
 
         new_pred = (pixAcc + mIoU) / 2
+        print(f"pixel acc: {pixAcc}\nmIoU: {mIoU}")
         writer.add_scalar('validation pixAcc', pixAcc, it)
         writer.add_scalar('validation mIoU', mIoU, it)
         writer.add_image("gt", _targets, it)
@@ -166,14 +165,12 @@ def save_checkpoint(model, args, is_best=False):
     directory = os.path.expanduser(args.save_dir)
     if not os.path.exists(directory):
         os.makedirs(directory)
-    filename = '{}_{}_{}.pth'.format(args.model, args.backbone, args.dataset)
+    filename = f"dinov2_mscoco.pth"
     filename = os.path.join(directory, filename)
 
-    if args.distributed:
-        model = model.module
     torch.save(model.state_dict(), filename)
     if is_best:
-        best_filename = '{}_{}_{}_best_model.pth'.format(args.model, args.backbone, args.dataset)
+        best_filename = 'dinov2_mscoco_best_model.pth'
         best_filename = os.path.join(directory, best_filename)
         shutil.copyfile(filename, best_filename)
 

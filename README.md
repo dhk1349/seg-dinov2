@@ -16,6 +16,9 @@ Fine-tuning dino v2 for semantic segmentation task on MSCOCO.
 ### Data preparation code for segmentation task
 * [Semantic Segmentation on PyTorch](https://github.com/Tramac/awesome-semantic-segmentation-pytorch)
 
+### Trained on 
+RTX3090\*2 with batch size of 8. 
+
 
 ## Prediction
 
